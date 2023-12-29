@@ -1,12 +1,19 @@
-#![allow(unused, non_upper_case_globals, unused_assignments)]
+#![allow(
+    unused,
+    non_upper_case_globals,
+    unused_assignments,
+    clippy::identity_op
+)]
 
+use indicatif::ProgressIterator;
 use libc::*;
 
 use std::ops::{Deref, DerefMut};
 
 const KiB: usize = 1 << 10;
+const MiB: usize = 1 << 20;
 
-const MAX_SUPPORTED_NUM: u32 = 200;
+const MAX_SUPPORTED_NUM: u32 = u16::MAX as u32;
 
 #[must_use]
 #[track_caller]
@@ -30,14 +37,13 @@ fn build_is_odd(jit: &mut JitMem) -> fn(i64) -> i64 {
     //      https://shell-storm.org/online/Online-Assembler-and-Disassembler/
     //      https://faydoc.tripod.com/cpu/jne.htm
     #[rustfmt::skip]
-    let mut block : [u8; 14]= [
-        // cmp rdi, 0x0
-        //          ^^^---vvvv
-        0x48, 0x83, 0xff, 0x00,
+    let mut block : [u8; 21]= [
+        // cmp rdi, 0x12345678
+        0x48, 0x81, 0xff, 0x78, 0x56, 0x34, 0x12,
 
         // Jump relative 8 ahead (this matches the end of this array)
         // jne 0x08
-        0x75, 0x08,
+        0x0f, 0x85, 0x08, 0x00, 0x00, 0x00,
 
         // mov rax, 0x1
         //          ^^^---vvvv
@@ -47,18 +53,13 @@ fn build_is_odd(jit: &mut JitMem) -> fn(i64) -> i64 {
         0xc3,
     ];
 
-    for b in block {
-        print!("{b:02x}");
-    }
-    println!();
-
     let mut mem = jit.as_slice_mut();
     unsafe {
         mem = write(mem, header);
 
         for n in 0..=MAX_SUPPORTED_NUM {
-            block[3] = n as u8;
-            block[9] = (n & 1) as u8;
+            block[3..=6].copy_from_slice(&n.to_le_bytes());
+            block[16] = (n & 1) as u8;
 
             mem = write(mem, block);
         }
@@ -78,10 +79,12 @@ fn main() {
     let mut jit = JitMem::new();
     let is_odd = build_is_odd(&mut jit);
 
-    for n in 0..MAX_SUPPORTED_NUM {
-        let is_n_odd = is_odd(n as i64);
-        println!("is_odd({n}) == {}", is_n_odd);
-    }
+    let num = std::env::args()
+        .nth(1)
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(1_234);
+
+    println!("{num} is {}", if is_odd(num) == 0 { "even" } else { "odd" });
 }
 
 #[test]
@@ -89,7 +92,8 @@ fn check_u8_nums() {
     let mut jit = JitMem::new();
     let is_odd = build_is_odd(&mut jit);
 
-    for n in 0..MAX_SUPPORTED_NUM {
+    println!("Checking all numbers 0..{MAX_SUPPORTED_NUM}");
+    for n in (0..MAX_SUPPORTED_NUM).progress() {
         let is_n_odd = is_odd(n as i64);
         if n & 1 == 0 {
             assert!(is_n_odd == 0, "is_odd({n}) == {is_n_odd}, but {n} is even!");
@@ -106,7 +110,7 @@ struct JitMem {
 
 impl JitMem {
     fn new() -> Self {
-        Self::new_with_size(16 * KiB)
+        Self::new_with_size(10 * MiB)
     }
 
     fn new_with_size(mut size: usize) -> Self {
@@ -119,17 +123,17 @@ impl JitMem {
 
         unsafe {
             let mut p_mem: *mut c_void = core::ptr::null_mut();
-
-            // MacOS has alignment requirements on executabe pages
-
             let _ = posix_memalign(&mut p_mem, PAGE_SIZE, size);
-            println!("JIT memory at 0x{:0x}", p_mem as usize);
-
+            // println!("JIT memory at 0x{:0x}", p_mem as usize);
             mprotect(p_mem, size, PROT_EXEC | PROT_READ | PROT_WRITE);
 
             // x64 'RET', anything that lands in "uninit" memory here will immediately return
             // We could also fault....
-            memset(p_mem, 0xC3, size);
+            // memset(p_mem, 0xC3, size);
+            for i in 0..(size / 2) {
+                *(p_mem as *mut u8).offset(2 * i as isize + 0) = 0x0f;
+                *(p_mem as *mut u8).offset(2 * i as isize + 1) = 0x0b;
+            }
 
             Self {
                 p_mem: p_mem as *mut u8,
