@@ -14,7 +14,8 @@ const KiB: usize = 1 << 10;
 const MiB: usize = 1 << 20;
 const GiB: usize = 1 << 30;
 
-const MAX_SUPPORTED_NUM: u32 = 1 << 30;
+// const MAX_SUPPORTED_NUM: u32 = 1 << 30;
+const MAX_SUPPORTED_NUM: u32 = 1 << 28;
 
 #[must_use]
 #[track_caller]
@@ -83,13 +84,13 @@ fn build_is_odd(_jit: &mut JitMem) -> fn(i64) -> i64 {
 fn main() {
     assert_eq!(std::env::consts::ARCH, "x86_64");
 
-    let mut jit = JitMem::new();
-    let is_odd = build_is_odd(&mut jit);
-
-    let num = std::env::args()
+    let num : i64 = std::env::args()
         .nth(1)
         .map(|s| s.parse().unwrap())
         .unwrap_or(1_234);
+
+    let mut jit = JitMem::new();
+    let is_odd = build_is_odd(&mut jit);
 
     println!("{num} is {}", if is_odd(num) == 0 { "even" } else { "odd" });
 }
@@ -117,7 +118,7 @@ struct JitMem {
 
 impl JitMem {
     fn new() -> Self {
-        Self::new_with_size(40 * GiB)
+        Self::new_with_size(40 * MAX_SUPPORTED_NUM as usize)
     }
 
     fn new_with_size(mut size: usize) -> Self {
