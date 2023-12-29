@@ -5,15 +5,16 @@
     clippy::identity_op
 )]
 
-use indicatif::ProgressIterator;
+use indicatif::{ProgressBar, ProgressIterator};
 use libc::*;
 
 use std::ops::{Deref, DerefMut};
 
 const KiB: usize = 1 << 10;
 const MiB: usize = 1 << 20;
+const GiB: usize = 1 << 30;
 
-const MAX_SUPPORTED_NUM: u32 = u16::MAX as u32;
+const MAX_SUPPORTED_NUM: u32 = 1 << 30;
 
 #[must_use]
 #[track_caller]
@@ -53,16 +54,22 @@ fn build_is_odd(jit: &mut JitMem) -> fn(i64) -> i64 {
         0xc3,
     ];
 
+    println!("JITing code");
     let mut mem = jit.as_slice_mut();
     unsafe {
         mem = write(mem, header);
 
-        for n in 0..=MAX_SUPPORTED_NUM {
+        let pb = ProgressBar::new(MAX_SUPPORTED_NUM as u64);
+        for n in (0..=MAX_SUPPORTED_NUM) {
+            pb.inc(1);
+
             block[3..=6].copy_from_slice(&n.to_le_bytes());
             block[16] = (n & 1) as u8;
 
             mem = write(mem, block);
         }
+
+        println!("Ready to roll :)");
 
         jit.make_fn()
     }
@@ -110,7 +117,7 @@ struct JitMem {
 
 impl JitMem {
     fn new() -> Self {
-        Self::new_with_size(10 * MiB)
+        Self::new_with_size(40 * GiB)
     }
 
     fn new_with_size(mut size: usize) -> Self {
@@ -124,7 +131,10 @@ impl JitMem {
         unsafe {
             let mut p_mem: *mut c_void = core::ptr::null_mut();
             let _ = posix_memalign(&mut p_mem, PAGE_SIZE, size);
-            // println!("JIT memory at 0x{:0x}", p_mem as usize);
+            println!(
+                "JIT memory allocated at 0x{:0x} ({} bytes)",
+                p_mem as usize, size
+            );
             mprotect(p_mem, size, PROT_EXEC | PROT_READ | PROT_WRITE);
 
             // x64 'RET', anything that lands in "uninit" memory here will immediately return
